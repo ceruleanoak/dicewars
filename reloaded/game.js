@@ -509,7 +509,7 @@ var Game = function(){
 		var pn = this.jun[this.ban];
 		var my_dice_percentage = this.player[pn].dice_c / (sum || 1);
 		var my_territory_count = this.player[pn].area_c;
-		var is_losing = my_dice_percentage < 0.2 && my_territory_count < 8;  // Less than 20% dice and few territories
+		var is_losing = my_dice_percentage < 0.15 && my_territory_count < 8;  // Less than 15% dice and few territories
 
 		// 攻撃元、攻撃先のリストを作り、ランダムで決める
 		var list_from = new Array(this.AREA_MAX*this.AREA_MAX);

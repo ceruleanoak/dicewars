@@ -754,12 +754,30 @@ function start_man(){
 	var hasAlliance = game.get_alliance_info(pn) !== null;
 	var usedDiplomacyThisRound = game.diplomacy_used_round[pn] === game.current_round;
 
+	// Calculate if player is dominant (>40% of dice makes you the target of all AI)
+	var totalDice = 0;
+	for( var i=0; i<8; i++ ) {
+		totalDice += game.player[i].dice_c;
+	}
+	var playerDicePercentage = game.player[pn].dice_c / (totalDice || 1);
+	var isDominant = playerDicePercentage > 0.4;  // >40% threshold
+
 	if( GameConfig.allowAlliances && !hasAlliance && !usedDiplomacyThisRound ) {
 		spr[sn_btn+3].x = view_w-100*nume/deno;
 		spr[sn_btn+3].y = ypos_mes - resize(60);
 		spr[sn_btn+3].visible = true;
 		spr[sn_btn+3].getChildAt(1).text = "DIPLOMACY";
-		btn_func[3] = start_diplomacy;
+
+		// Disable and gray out button if player is dominant
+		if( isDominant ) {
+			spr[sn_btn+3].alpha = 0.4;  // Gray out
+			spr[sn_btn+3].getChildAt(1).color = "#666666";
+			btn_func[3] = null;  // Disable click
+		} else {
+			spr[sn_btn+3].alpha = 1.0;  // Normal opacity
+			spr[sn_btn+3].getChildAt(1).color = "#000000";
+			btn_func[3] = start_diplomacy;
+		}
 	} else {
 		spr[sn_btn+3].visible = false;
 		btn_func[3] = null;
