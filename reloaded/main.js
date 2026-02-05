@@ -1270,6 +1270,12 @@ function start_battle(){
 	for( i=0; i<2; i++ ){
 		battle[i].arm = game.adat[an[i]].arm;
 		battle[i].dmax = game.adat[an[i]].dice;
+
+		// CRITICAL FIX: Reset usedice array to ensure clean state for each battle
+		// Without this, the array stays shuffled from previous battles
+		battle[i].usedice = [0,1,2,3,4,5,6,7];
+
+		// Fisher-Yates shuffle for random dice selection
 		for( j=0; j<8; j++ ){
 			var r = Math.floor(Math.random()*8);
 			var tmp = battle[i].usedice[j];
@@ -1284,6 +1290,14 @@ function start_battle(){
 			}
 			battle[i].fin[j] = false;
 		}
+	}
+
+	// Debug logging for improbable outcomes
+	if( console && console.log ) {
+		var attacker_dice = battle[0].dmax;
+		var defender_dice = battle[1].dmax;
+		console.log("Battle: " + attacker_dice + " dice (sum=" + battle[0].sum + ") vs " +
+		           defender_dice + " dice (sum=" + battle[1].sum + ")");
 	}
 
         //  20220911  don't show the battle(?) sprite
@@ -1423,7 +1437,8 @@ function after_battle(){
 	var defender_dice_before = game.adat[game.area_to].dice;
 	var defeat = ( battle[0].sum>battle[1].sum ) ? 1 : 0;
 	if( defeat>0 ){
-		game.adat[game.area_to].dice = game.adat[game.area_from].dice-1;
+		// Transfer dice to conquered territory, clamped to max 8
+		game.adat[game.area_to].dice = Math.min(game.adat[game.area_from].dice-1, 8);
 		game.adat[game.area_from].dice = 1;
 		game.adat[game.area_to].arm = arm0;
 		game.set_area_tc(arm0);
@@ -1737,7 +1752,9 @@ function play_history(){
 	}else if( stat==1 ){
 		// 補給
 		an = game.his[replay_c].from;
-		game.adat[an].dice++;
+		if( game.adat[an].dice < 8 ) {
+			game.adat[an].dice++;
+		}
 		draw_areadice(an2sn[an],an);
 		stage.update();
 		replay_c++;
