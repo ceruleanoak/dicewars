@@ -108,7 +108,20 @@ var Game = function(){
 	// 初期配置
 	this.his_arm = new Array(this.AREA_MAX);
 	this.his_dice = new Array(this.AREA_MAX);
-	
+	// Alliances
+	this.alliances = {};  // {player_id: {target: player_id, turns_remaining: N, type: "non_aggression"}}
+
+	// Alliance tracking
+	this.current_round = 0;  // Current round number (increments when ban wraps to 0)
+	this.diplomacy_used_round = {};  // {player_id: round_number} - tracks when diplomacy was used
+	this.attack_history_current = {};  // {from_player: [to_player, ...]} - attacks this round
+	this.attack_history_previous = {};  // Attacks from previous round
+	this.previous_round_power = {};  // {player_id: dice_count} - power from last round
+	this.alliance_betrayals = {};  // {player_id: count} - how many times player attacked former ally
+	this.alliance_expiry_round = {};  // {"from_to": round_number} - when alliance expired
+	this.significant_damage_current_round = {};  // {"from_to": boolean} - significant damage this round
+	this.significant_damage_previous_round = {};  // {"from_to": boolean} - significant damage last round
+
 	// ゲーム開始（マップ作成しておくこと、pmax,userなど設定しておくこと）
 	this.start_game = function(){
 		var i;
@@ -127,6 +140,22 @@ var Game = function(){
 		for( i=0; i<this.AREA_MAX; i++ ){
 			this.his_arm[i] = this.adat[i].arm;
 			this.his_dice[i] = this.adat[i].dice;
+		}
+
+		// Initialize alliance tracking
+		this.current_round = 0;
+		this.diplomacy_used_round = {};
+		this.attack_history_current = {};
+		this.attack_history_previous = {};
+		this.previous_round_power = {};
+		this.alliance_betrayals = {};
+		this.alliance_expiry_round = {};
+		this.significant_damage_current_round = {};
+		this.significant_damage_previous_round = {};
+
+		// Initialize power tracking for all players
+		for( i=0; i<8; i++ ) {
+			this.previous_round_power[i] = this.player[i].dice_c;
 		}
 	}
 	
@@ -445,8 +474,8 @@ var Game = function(){
 	/////////////////////////////////////////////////////////////////////
 	// COM思考
 	this.com_thinking = function(){
-		var i,j;
-		// エリア数、ダイス総数チェック		
+		var i,j,k;
+		// エリア数、ダイス総数チェック
 		for( i=0; i<8; i++ ){
 			this.player[i].area_c = 0;
 			this.player[i].dice_c = 0;
@@ -475,11 +504,20 @@ var Game = function(){
 		for( i=0; i<8; i++ ){
 			if( this.player[i].dice_c > sum*2/5 ) top = i;
 		}
+
+		// Check if current player is in losing position (endgame turtling logic)
+		var pn = this.jun[this.ban];
+		var my_dice_percentage = this.player[pn].dice_c / (sum || 1);
+		var my_territory_count = this.player[pn].area_c;
+		var is_losing = my_dice_percentage < 0.2 && my_territory_count < 8;  // Less than 20% dice and few territories
+
 		// 攻撃元、攻撃先のリストを作り、ランダムで決める
 		var list_from = new Array(this.AREA_MAX*this.AREA_MAX);
 		var list_to = new Array(this.AREA_MAX*this.AREA_MAX);
+		var list_priority = new Array(this.AREA_MAX*this.AREA_MAX);  // Priority weighting
 		var lc = 0;
-		var pn = this.jun[this.ban];
+
+		// First pass: Direct adjacent attacks
 		for( i=1; i<this.AREA_MAX; i++ ){
 			if( this.adat[i].size == 0 ) continue;
 			if( this.adat[i].arm != pn ) continue;
@@ -488,9 +526,17 @@ var Game = function(){
 				if( this.adat[j].size == 0 ) continue;
 				if( this.adat[j].arm == pn ) continue;
 				if( this.adat[i].join[j]==0 ) continue;
+
+				// Alliance check: Skip if target is allied with current player
+				var target_owner = this.adat[j].arm;
+				if( this.are_allied(pn, target_owner) ) continue;
 				if( top>=0 ){	// ダントツがいて、２着以下から２着以下
 					if( this.adat[i].arm!=top && this.adat[j].arm!=top ) continue;
 				}
+
+				// Endgame turtling: If losing, only attack with overwhelming advantage (3+ dice advantage)
+				if( is_losing && this.adat[i].dice < this.adat[j].dice + 3 ) continue;
+
 				if( this.adat[j].dice > this.adat[i].dice ) continue;	// 敵が多勢
 				// 敵と同数の場合
 				if( this.adat[j].dice == this.adat[i].dice ){
@@ -501,14 +547,87 @@ var Game = function(){
 					if( Math.random()*10>1 ) f=1;
 					if( f==0 ) continue;
 				}
+
+				var priority = 1;  // Base priority
+
+				// Alliance boost: Prioritize attacking dominant player if coordinated alliance
+				var dominant_player = this.get_dominant_player();
+				if( this.alliances[pn] && this.alliances[pn].type === "coordinated" && target_owner === dominant_player ) {
+					priority += 2;  // Higher priority for coordinated attacks
+				}
+
 				list_from[lc] = i;
 				list_to[lc] = j;
+				list_priority[lc] = priority;
 				lc++;
 			}
 		}
+
+		// Second pass: Look 2 hops away for high-value targets (only if not in turtle mode)
+		if( !is_losing ) {
+			for( i=1; i<this.AREA_MAX; i++ ){
+				if( this.adat[i].size == 0 ) continue;
+				if( this.adat[i].arm != pn ) continue;
+				if( this.adat[i].dice <= 1 ) continue;
+
+				// Look through intermediate territories (1 hop away)
+				for( j=1; j<this.AREA_MAX; j++ ){
+					if( this.adat[j].size == 0 ) continue;
+					if( this.adat[j].arm == pn ) continue;
+					if( this.adat[i].join[j]==0 ) continue;
+					if( this.adat[j].dice > this.adat[i].dice ) continue;  // Must be able to take intermediate
+
+					var intermediate_owner = this.adat[j].arm;
+					if( this.are_allied(pn, intermediate_owner) ) continue;
+
+					// Look at targets 2 hops away (adjacent to intermediate)
+					for( k=1; k<this.AREA_MAX; k++ ){
+						if( this.adat[k].size == 0 ) continue;
+						if( this.adat[k].arm == pn ) continue;
+						if( this.adat[k].arm == intermediate_owner ) continue;  // Not same as intermediate
+						if( this.adat[j].join[k]==0 ) continue;  // Must be adjacent to intermediate
+
+						var final_owner = this.adat[k].arm;
+						if( this.are_allied(pn, final_owner) ) continue;
+
+						// High-value target criteria:
+						// 1. Many dice (5+) = valuable territory
+						// 2. Belongs to current leader
+						var is_high_value = this.adat[k].dice >= 5 || final_owner === top;
+
+						if( !is_high_value ) continue;
+
+						// Only add if we can realistically take the intermediate
+						if( this.adat[i].dice - this.adat[j].dice >= 2 ) {
+							list_from[lc] = i;
+							list_to[lc] = j;
+							list_priority[lc] = 2;  // Medium priority (strategic target)
+							lc++;
+						}
+					}
+				}
+			}
+		}
+
 		if( lc == 0 ) return 0;
 
-		var n = Math.floor(Math.random()*lc);
+		// Weighted random selection based on priority
+		var total_weight = 0;
+		for( i=0; i<lc; i++ ) {
+			total_weight += list_priority[i];
+		}
+
+		var rand = Math.random() * total_weight;
+		var accumulated = 0;
+		var n = 0;
+		for( i=0; i<lc; i++ ) {
+			accumulated += list_priority[i];
+			if( rand <= accumulated ) {
+				n = i;
+				break;
+			}
+		}
+
 		this.area_from = list_from[n];
 		this.area_to = list_to[n];
 	}
@@ -521,6 +640,315 @@ var Game = function(){
 		this.his[this.his_c].to = to;
 		this.his[this.his_c].res = res;
 		this.his_c++;
+	}
+
+	/////////////////////////////////////////////////////////////////////
+	// Dice Redeployment System
+
+	// Check if there's a connected path between two areas through owned territory
+	this.has_connected_path = function(from, to) {
+		if (from === to) return true;
+
+		var pn = this.adat[from].arm;
+		var visited = {};
+		var queue = [from];
+		visited[from] = true;
+
+		// Breadth-first search through connected owned territories
+		while (queue.length > 0) {
+			var current = queue.shift();
+
+			// Check all adjacent areas
+			for (var i = 0; i < this.AREA_MAX; i++) {
+				if (this.adat[i].size === 0) continue;
+				if (visited[i]) continue;
+				if (this.adat[i].arm !== pn) continue;
+				if (this.adat[current].join[i] !== 1) continue;
+
+				// Found the destination
+				if (i === to) return true;
+
+				// Add to queue for further exploration
+				visited[i] = true;
+				queue.push(i);
+			}
+		}
+
+		return false;
+	}
+
+	// Check if redeployment is valid from one area to another
+	this.can_redeploy = function(from, to) {
+		// Check that both areas exist
+		if (this.adat[from].size === 0 || this.adat[to].size === 0) return false;
+
+		// Must be same owner
+		if (this.adat[from].arm !== this.adat[to].arm) return false;
+
+		// Must be connected through a chain of owned territories
+		if (!this.has_connected_path(from, to)) return false;
+
+		// Source must have at least 2 dice (leave at least 1)
+		if (this.adat[from].dice <= 1) return false;
+
+		return true;
+	}
+
+	// Execute redeployment of dice from one area to another
+	this.execute_redeploy = function(from, to, count) {
+		// Validate count
+		if (count < 1 || count > this.adat[from].dice - 1) return false;
+
+		// Limit redeployment to max 3 dice
+		if (count > 3) count = 3;
+
+		// Limit by available space on target (max 8 dice total)
+		var available_space = 8 - this.adat[to].dice;
+		if (count > available_space) count = available_space;
+
+		// If no space available, can't redeploy
+		if (count <= 0) return false;
+
+		// Move dice
+		this.adat[from].dice -= count;
+		this.adat[to].dice += count;
+
+		// Handle 8-dice cap with overflow to stock (shouldn't happen now, but keep for safety)
+		if (this.adat[to].dice > 8) {
+			var overflow = this.adat[to].dice - 8;
+			this.adat[to].dice = 8;
+
+			var pn = this.adat[to].arm;
+			this.player[pn].stock += overflow;
+
+			// Cap stock at STOCK_MAX
+			if (this.player[pn].stock > this.STOCK_MAX) {
+				this.player[pn].stock = this.STOCK_MAX;
+			}
+		}
+
+		return true;
+	}
+
+	// Get list of valid redeployment destinations from a source area
+	this.get_redeploy_targets = function(from) {
+		var targets = [];
+		var pn = this.adat[from].arm;
+
+		// Find all areas connected through chains of owned territory
+		for (var i = 0; i < this.AREA_MAX; i++) {
+			if (this.adat[i].size === 0) continue;
+			if (this.adat[i].arm !== pn) continue;
+			if (i === from) continue;
+			if (!this.has_connected_path(from, i)) continue;
+
+			targets.push(i);
+		}
+
+		return targets;
+	}
+
+	/////////////////////////////////////////////////////////////////////
+	// AI Alliance System
+
+	// Helper: Record an attack for alliance evaluation
+	this.record_attack = function(from_player, to_player, dice_lost) {
+		// Record in current attack history
+		if (!this.attack_history_current[from_player]) {
+			this.attack_history_current[from_player] = [];
+		}
+		if (this.attack_history_current[from_player].indexOf(to_player) === -1) {
+			this.attack_history_current[from_player].push(to_player);
+		}
+
+		// Check if this was a betrayal (attacking a former ally)
+		if (this.are_allied(from_player, to_player)) {
+			if (!this.alliance_betrayals[from_player]) {
+				this.alliance_betrayals[from_player] = 0;
+			}
+			this.alliance_betrayals[from_player]++;
+		}
+
+		// Check if this was significant damage (>50% of target's dice)
+		var target_power = this.previous_round_power[to_player] || this.player[to_player].dice_c;
+		if (dice_lost > target_power * 0.5) {
+			var key = from_player + "_" + to_player;
+			this.significant_damage_current_round[key] = true;
+		}
+	}
+
+	// Helper: Start new round tracking
+	this.increment_round = function() {
+		this.current_round++;
+
+		// Move current attacks to previous
+		this.attack_history_previous = this.attack_history_current;
+		this.attack_history_current = {};
+
+		// Move current damage to previous, clear current
+		this.significant_damage_previous_round = this.significant_damage_current_round;
+		this.significant_damage_current_round = {};
+
+		// Save current power levels for next round comparison
+		for (var i = 0; i < 8; i++) {
+			this.previous_round_power[i] = this.player[i].dice_c;
+		}
+	}
+
+	// Helper: Check if player attacked target in previous round
+	this.attacked_last_round = function(from_player, to_player) {
+		if (!this.attack_history_previous[from_player]) return false;
+		return this.attack_history_previous[from_player].indexOf(to_player) !== -1;
+	}
+
+	// Helper: Check if target got weaker since last round
+	this.target_got_weaker = function(player) {
+		var prev = this.previous_round_power[player] || 0;
+		var current = this.player[player].dice_c || 0;
+		return current < prev;
+	}
+
+	// Propose an alliance between two players
+	this.propose_alliance = function(from, to, type, duration) {
+		// Can't ally with yourself
+		if (from === to) return false;
+
+		// Check if players are still in game
+		if (this.player[from].area_tc === 0 || this.player[to].area_tc === 0) return false;
+
+		// Limit to 1 alliance at a time - reject if proposer already has an alliance
+		if (this.alliances[from]) return false;
+
+		// NEVER accept if target has existing alliance (Criterion 5)
+		if (this.alliances[to]) return false;
+
+		// NEVER accept if proposer attacked target this round (Criterion 3)
+		if (this.attack_history_current[from] &&
+		    this.attack_history_current[from].indexOf(to) !== -1) {
+			return false;
+		}
+
+		// Evaluate alliance using new criteria
+		var acceptance_score = this.evaluate_alliance(from, to, type);
+
+		// Accept if score is 50% or above (>= 0.5 threshold)
+		if (acceptance_score >= 0.5) {
+			// Create bilateral alliance with duration (default 3 rounds)
+			this.alliances[to] = {target: from, turns_remaining: duration, type: type};
+			this.alliances[from] = {target: to, turns_remaining: duration, type: type};
+			return true;
+		}
+
+		return false;
+	}
+
+	// Evaluate whether AI should accept alliance proposal
+	// Uses 8 criteria to determine acceptance likelihood
+	this.evaluate_alliance = function(from, to, type) {
+		var score = 0.3;  // Base acceptance score (30%)
+
+		// Criterion 1: More likely in first round
+		if (this.current_round === 0) {
+			score += 0.25;  // +25% in first round
+		}
+
+		// Criterion 2: More likely when proposer is more powerful than target
+		var from_power = this.player[from].dice_c;
+		var to_power = this.player[to].dice_c;
+		if (from_power > to_power) {
+			var power_ratio = from_power / (to_power || 1);
+			// Scale bonus: 1.1x = +0.05, 1.5x = +0.15, 2x = +0.25
+			score += Math.min(0.25, (power_ratio - 1) * 0.5);
+		}
+
+		// Criterion 4: Slightly more likely if target got weaker since last round
+		if (this.target_got_weaker(to)) {
+			score += 0.1;
+		}
+
+		// Criterion 6: More likely if same round their alliance expired
+		var alliance_key = to + "_" + from;  // Check if target->from alliance expired
+		if (this.alliance_expiry_round[alliance_key] === this.current_round) {
+			score += 0.2;  // Nostalgic for the alliance
+		}
+
+		// Criterion 7: Less likely if proposer has attacked former allies (accumulates)
+		var betrayal_count = this.alliance_betrayals[from] || 0;
+		if (betrayal_count > 0) {
+			score -= betrayal_count * 0.15;  // -15% per betrayal (stacks)
+		}
+
+		// Criterion 8: VERY likely if proposer significantly damaged target last round
+		var damage_key = from + "_" + to;
+		if (this.significant_damage_previous_round[damage_key]) {
+			score += 0.4;  // +40% - fear-based alliance
+		}
+
+		// Small random factor for variety
+		score += (Math.random() - 0.5) * 0.1;
+
+		return score;
+	}
+
+	// Get the dominant player (>40% of total dice)
+	this.get_dominant_player = function() {
+		var total_dice = 0;
+		var i;
+
+		for (i = 0; i < 8; i++) {
+			total_dice += this.player[i].dice_c;
+		}
+
+		for (i = 0; i < 8; i++) {
+			if (this.player[i].dice_c > total_dice * 0.4) {
+				return i;
+			}
+		}
+
+		return -1;  // No dominant player
+	}
+
+	// Update alliance turn counters (call at end of each player turn)
+	this.update_alliances = function() {
+		var expired = [];
+
+		// Decrement alliance turn counters
+		for (var pn in this.alliances) {
+			if (this.alliances.hasOwnProperty(pn)) {
+				this.alliances[pn].turns_remaining--;
+
+				if (this.alliances[pn].turns_remaining <= 0) {
+					expired.push(pn);
+					// Track when this alliance expired (for criterion 6)
+					var target = this.alliances[pn].target;
+					var key = pn + "_" + target;
+					this.alliance_expiry_round[key] = this.current_round;
+				}
+			}
+		}
+
+		// Remove expired alliances
+		for (var i = 0; i < expired.length; i++) {
+			delete this.alliances[expired[i]];
+		}
+
+		return expired;
+	}
+
+	// Check if two players are allied
+	this.are_allied = function(pn1, pn2) {
+		if (this.alliances[pn1] && this.alliances[pn1].target === pn2) {
+			return true;
+		}
+		return false;
+	}
+
+	// Get alliance info for a player
+	this.get_alliance_info = function(pn) {
+		if (this.alliances[pn]) {
+			return this.alliances[pn];
+		}
+		return null;
 	}
 }
 

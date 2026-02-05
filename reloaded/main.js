@@ -75,7 +75,7 @@ var bturn = 0;	// バトル用ターン
 var replay_c=0;
 
 // サウンド関係
-var soundon = false;
+var soundon = GameConfig.soundEnabled;
 var manifest = [
 	{"src":"./sound/button.wav",	"id":"snd_button"},
 	{"src":"./sound/clear.wav",		"id":"snd_clear"},
@@ -107,6 +107,8 @@ function init() {
 //	   touchdev = true;
 	if( touchdev ){
 		soundon = false;
+	} else {
+		soundon = GameConfig.soundEnabled;
 	}
 	// 表示位置
 	var iw = window.innerWidth;
@@ -318,7 +320,7 @@ function init() {
 	sn++;
 	
 	// ボタン
-	var btxt = ["START","TOP PAGE","YES","NO","END TURN","TITLE","HISTORY"];
+	var btxt = ["START","TOP PAGE","YES","NO","END TURN","TITLE","HISTORY","SETTINGS"];
 	bmax = btxt.length;
 	sn_btn = sn;
 	for( i=0; i<bmax; i++ ){
@@ -349,18 +351,16 @@ function init() {
 	stage.addEventListener("stagemouseup", mouseUpListner );
 	createjs.Ticker.addEventListener("tick", onTick);
 	createjs.Ticker.setFPS(60);
-	
-	if( soundon ){
-		// PCの場合にはサウンド読み込む
-		var queue = new createjs.LoadQueue(false);
-		queue.installPlugin(createjs.Sound);
-		queue.loadManifest(manifest,true);
-		queue.addEventListener("fileload",handleFileLoad);  
-		queue.addEventListener("complete",handleComplete);		
-	}else{
-		waitcount = 60;
-		timer_func = fake_loading;
-	}
+
+	// Always skip sound loading at startup
+	// Note: Sound requires running from a web server (http://), not file://
+	// See README_SOUND.md for instructions
+	waitcount = 60;
+	timer_func = fake_loading;
+
+	// Suppress CreateJS Sound auto-init errors when running from file://
+	// The library tests audio capabilities on load, which fails with file:// protocol
+	// This is expected and doesn't affect gameplay
 }
 
 function handleFileLoad(event){
@@ -379,7 +379,9 @@ function startSound(soundid){
 }
 function playSound(soundid){
 	if( !soundon ) return;
-	instance[soundid].setVolume(0.5);
+	// Check if sound instance exists (sounds may not be loaded if disabled at startup)
+	if( !instance[soundid] ) return;
+	instance[soundid].setVolume(GameConfig.soundVolume);
 	instance[soundid].play();
 }
 
@@ -458,8 +460,14 @@ function fake_loading(){
 
 function start_title(){
 	var i;
-	
+
 	for( i=0; i<sn_max; i++ ) spr[i].visible = false;
+
+	// Clean up settings UI if it exists
+	var settingsUI = stage.getChildByName("settings_ui");
+	if( settingsUI ){
+		stage.removeChild(settingsUI);
+	}
 	
 	spr[sn_title].visible = true;
 	spr[sn_title].x = 0;
@@ -483,8 +491,12 @@ function start_title(){
 	spr[sn_btn+0].y = resize(390);
 	spr[sn_btn+0].visible = true;
 	btn_func[0] = make_map;
+	spr[sn_btn+7].x = resize(640);
+	spr[sn_btn+7].y = resize(490);
+	spr[sn_btn+7].visible = true;
+	btn_func[7] = start_settings;
 	spr[sn_btn+1].x = resize(640);
-	spr[sn_btn+1].y = resize(490);
+	spr[sn_btn+1].y = resize(590);
 	spr[sn_btn+1].visible = true;
 	btn_func[1] = toppage;
 
@@ -596,11 +608,22 @@ function draw_areashape( sn, area, paint_mode ){
 	var ay = [-s,s,cel_h-s,cel_h+s,cel_h-s,s,-s];
 	var ay_top = [-cel_h/2,-cel_h/2,cel_h-s,cel_h+s,cel_h-s,-cel_h/2,-cel_h/2];
 	var line_color = "#222244";
-	if( paint_mode ) line_color = "#ff0000";
-	spr[sn].graphics.beginStroke(line_color);
 	var armcolor = ["#b37ffe","#b3ff01","#009302","#ff7ffe","#ff7f01","#b3fffe","#ffff01","#ff5858"];
 	var color = armcolor[game.adat[area].arm];
-	if( paint_mode ) color = "#000000";
+
+	// Paint modes: 0=normal, 1=attack(red), 2=redeploy source(green), 3=redeploy dest(blue)
+	if( paint_mode == 1 ) {
+		line_color = "#ff0000";
+		color = "#000000";
+	} else if( paint_mode == 2 ) {
+		line_color = "#00ff00";
+		color = "#004400";
+	} else if( paint_mode == 3 ) {
+		line_color = "#0088ff";
+		color = "#002244";
+	}
+
+	spr[sn].graphics.beginStroke(line_color);
 	spr[sn].graphics.setStrokeStyle(4*nume/deno,"round","round").beginFill(color);
 	var px=ax[d];
 	var py=ay[d];
@@ -702,10 +725,18 @@ function start_player(){
 ////////////////////////////////////////////////////
 
 function start_man(){
-	
+	var pn = game.jun[game.ban];
+	var allianceInfo = game.get_alliance_info(pn);
+
 	spr[sn_mes].visible = true;
-	spr[sn_mes].text = "1. Click your area. 2. Click neighbor to attack.";
-	spr[sn_mes].color = "#000000";
+	if( allianceInfo ) {
+		var allyNum = allianceInfo.target;
+		spr[sn_mes].text = "Allied with P" + (allyNum + 1) + " (" + allianceInfo.turns_remaining + " rounds)";
+		spr[sn_mes].color = "#00aa00";
+	} else {
+		spr[sn_mes].text = "1. Click your area. 2. Click neighbor to attack.";
+		spr[sn_mes].color = "#000000";
+	}
 	spr[sn_mes].textAlign = "left";
 	spr[sn_mes].x = view_w*0.05;
 	spr[sn_mes].y = ypos_mes;
@@ -715,7 +746,24 @@ function start_man(){
 	spr[sn_btn+4].x = view_w-100*nume/deno;
 	spr[sn_btn+4].y = ypos_mes;
 	spr[sn_btn+4].visible = true;
+	spr[sn_btn+4].getChildAt(1).text = "END TURN";
 	btn_func[4] = end_turn;
+
+	// Diplomacy button (if alliances enabled, player has no active alliance, and hasn't used diplomacy this round)
+	var pn = game.jun[game.ban];
+	var hasAlliance = game.get_alliance_info(pn) !== null;
+	var usedDiplomacyThisRound = game.diplomacy_used_round[pn] === game.current_round;
+
+	if( GameConfig.allowAlliances && !hasAlliance && !usedDiplomacyThisRound ) {
+		spr[sn_btn+3].x = view_w-100*nume/deno;
+		spr[sn_btn+3].y = ypos_mes - resize(60);
+		spr[sn_btn+3].visible = true;
+		spr[sn_btn+3].getChildAt(1).text = "DIPLOMACY";
+		btn_func[3] = start_diplomacy;
+	} else {
+		spr[sn_btn+3].visible = false;
+		btn_func[3] = null;
+	}
 	
 	spr[sn_from].visible = false;
 	spr[sn_to].visible = false;
@@ -791,15 +839,351 @@ function second_click(){
 function end_turn(){
 
 	spr[sn_btn+4].visible = false;
+	spr[sn_btn+3].visible = false;
 	spr[sn_from].visible = false;
 	spr[sn_to].visible = false;
 	spr[sn_mes].visible = false;
-	
+
+	// Clean up any diplomacy overlays
+	stage.removeChild(stage.getChildByName("diplomacy_ui"));
+	stage.removeChild(stage.getChildByName("alliance_result"));
+
 	timer_func = null;
 	click_func = null;
 	move_func = null;
 	releaese_func = null;
 
+	// Check if redeployment phase should be triggered
+	var pn = game.jun[game.ban];
+	if (GameConfig.allowRedeployment && pn === game.user) {
+		start_redeploy();
+	} else {
+		start_supply();
+	}
+}
+
+////////////////////////////////////////////////////
+// Dice Redeployment Phase
+////////////////////////////////////////////////////
+
+var redeploy_source = -1;
+var redeploy_dest = -1;
+
+function start_redeploy(){
+	var pn = game.jun[game.ban];
+
+	// Hide any previous highlights
+	spr[sn_from].visible = false;
+	spr[sn_to].visible = false;
+
+	// Show instructions
+	spr[sn_mes].visible = true;
+	spr[sn_mes].text = "REDEPLOYMENT PHASE: Click source, then destination";
+	spr[sn_mes].color = "#00aa00";
+	spr[sn_mes].font = Math.floor(24*nume/deno)+"px Roboto";
+	spr[sn_mes].textAlign = "center";
+	spr[sn_mes].x = view_w/2;
+	spr[sn_mes].y = ypos_mes;
+
+	// Show "Done Redeploying" button
+	spr[sn_btn+4].x = view_w/2;
+	spr[sn_btn+4].y = resize(750);
+	spr[sn_btn+4].visible = true;
+	spr[sn_btn+4].getChildAt(1).text = "DONE";
+	btn_func[4] = finish_redeploy;
+
+	stage.update();
+
+	redeploy_source = -1;
+	redeploy_dest = -1;
+
+	timer_func = null;
+	click_func = redeploy_first_click;
+	move_func = null;
+	releaese_func = null;
+}
+
+function redeploy_first_click(){
+	var i,c;
+	var an = -1;
+	var pn = game.jun[game.ban];
+
+	// Find clicked area
+	for( i=0; i<game.AREA_MAX; i++ ){
+		if( game.adat[i].size == 0 ) continue;
+		if( game.adat[i].arm != pn ) continue;
+		if( game.adat[i].dice <= 1 ) continue;  // Need at least 2 dice
+
+		c = game.adat[i].cpos;
+		var pt = spr[sn_area+i].globalToLocal(stage.mouseX,stage.mouseY);
+		if( spr[sn_area+i].hitTest(pt.x,pt.y) ){
+			an = i;
+			break;
+		}
+	}
+
+	if( an < 0 ) return;
+
+	// Check if this area has valid targets
+	var targets = game.get_redeploy_targets(an);
+	if( targets.length === 0 ) {
+		spr[sn_mes].text = "No valid destinations from this territory!";
+		spr[sn_mes].color = "#aa0000";
+		stage.update();
+		return;
+	}
+
+	redeploy_source = an;
+
+	// Highlight source in green
+	draw_areashape(sn_from, an, 2);  // 2 for green highlight
+	spr[sn_from].visible = true;
+
+	spr[sn_mes].text = "Select destination (adjacent owned territory)";
+	spr[sn_mes].color = "#00aa00";
+
+	stage.update();
+	playSound("snd_click");
+
+	click_func = redeploy_second_click;
+}
+
+function redeploy_second_click(){
+	var i,c;
+	var an = -1;
+	var pn = game.jun[game.ban];
+
+	// Find clicked area
+	for( i=0; i<game.AREA_MAX; i++ ){
+		if( game.adat[i].size == 0 ) continue;
+		if( game.adat[i].arm != pn ) continue;
+
+		c = game.adat[i].cpos;
+		var pt = spr[sn_area+i].globalToLocal(stage.mouseX,stage.mouseY);
+		if( spr[sn_area+i].hitTest(pt.x,pt.y) ){
+			an = i;
+			break;
+		}
+	}
+
+	if( an < 0 ) return;
+
+	// Check if clicking same area (deselect)
+	if( an === redeploy_source ) {
+		spr[sn_from].visible = false;
+		spr[sn_mes].text = "REDEPLOYMENT PHASE: Click source, then destination";
+		stage.update();
+		redeploy_source = -1;
+		click_func = redeploy_first_click;
+		return;
+	}
+
+	// Validate redeployment
+	if( !game.can_redeploy(redeploy_source, an) ) {
+		spr[sn_mes].text = "Invalid destination! Must be adjacent and owned by you";
+		spr[sn_mes].color = "#aa0000";
+		stage.update();
+		return;
+	}
+
+	redeploy_dest = an;
+
+	// Highlight destination in blue
+	draw_areashape(sn_to, an, 3);  // 3 for blue highlight
+	spr[sn_to].visible = true;
+
+	stage.update();
+	playSound("snd_click");
+
+	// Show dice count picker
+	show_dice_picker();
+}
+
+// Track selected dice count for picker
+var selected_dice_count = 1;
+
+function show_dice_picker(){
+	var maxDice = game.adat[redeploy_source].dice - 1;  // Leave at least 1
+
+	// Default selection to 1
+	selected_dice_count = 1;
+
+	// Create picker UI
+	stage.removeChild(stage.getChildByName("dice_picker"));
+
+	var picker = new createjs.Container();
+	picker.name = "dice_picker";
+
+	// Background
+	var bg = new createjs.Shape();
+	bg.graphics.beginFill("rgba(0,0,0,0.8)").drawRect(-resize(220), -resize(100), resize(440), resize(200));
+	picker.addChild(bg);
+
+	// Title
+	var title = new createjs.Text("Move how many dice?", Math.floor(28*nume/deno)+"px Roboto", "#ffffff");
+	title.textAlign = "center";
+	title.textBaseline = "middle";
+	title.y = -resize(60);
+	picker.addChild(title);
+
+	// Subtitle instruction
+	var subtitle = new createjs.Text("Click number to select, then click DONE to confirm", Math.floor(18*nume/deno)+"px Roboto", "#aaaaaa");
+	subtitle.textAlign = "center";
+	subtitle.textBaseline = "middle";
+	subtitle.y = -resize(30);
+	picker.addChild(subtitle);
+
+	// Dice count buttons (limit to 3 max, matching backend limit)
+	var maxButtons = Math.min(maxDice, 3);
+	for( var i = 1; i <= maxButtons; i++ ) {
+		var btn = new createjs.Container();
+		btn.name = "dice_btn_" + i;
+		btn.cursor = "pointer";
+
+		var btnBg = new createjs.Shape();
+		btnBg.name = "bg";
+		var btnTxt = new createjs.Text(i.toString(), Math.floor(32*nume/deno)+"px Anton", "#ffffff");
+		btnTxt.name = "txt";
+		btnTxt.textAlign = "center";
+		btnTxt.textBaseline = "middle";
+
+		// Apply selection styling (1 is selected by default)
+		if( i === 1 ) {
+			btnBg.graphics.beginFill("#ffffff").drawRect(-resize(35), -resize(25), resize(70), resize(50));
+			btnBg.graphics.beginStroke("#00aa00").setStrokeStyle(3).drawRect(-resize(35), -resize(25), resize(70), resize(50));
+			btnTxt.color = "#00aa00";
+		} else {
+			btnBg.graphics.beginFill("#00aa00").drawRect(-resize(35), -resize(25), resize(70), resize(50));
+			btnBg.graphics.beginStroke("#ffffff").setStrokeStyle(2).drawRect(-resize(35), -resize(25), resize(70), resize(50));
+			btnTxt.color = "#ffffff";
+		}
+
+		btn.addChild(btnBg);
+		btn.addChild(btnTxt);
+
+		var xOffset = (i - (maxButtons+1)/2) * resize(80);
+		btn.x = xOffset;
+		btn.y = resize(20);
+
+		picker.addChild(btn);
+	}
+
+	picker.x = view_w/2;
+	picker.y = view_h/2;
+
+	stage.addChild(picker);
+	stage.update();
+
+	click_func = click_dice_picker;
+}
+
+function click_dice_picker(){
+	var maxDice = game.adat[redeploy_source].dice - 1;
+	var maxButtons = Math.min(maxDice, 3);
+	var picker = stage.getChildByName("dice_picker");
+	if( !picker ) return;
+
+	// Check number button clicks (for selection only)
+	for( var i = 1; i <= maxButtons; i++ ) {
+		var btn = picker.getChildByName("dice_btn_" + i);
+		if( btn ) {
+			var pt = btn.globalToLocal(stage.mouseX, stage.mouseY);
+			if( Math.abs(pt.x) < resize(35) && Math.abs(pt.y) < resize(25) ) {
+				// Update selection
+				if( selected_dice_count !== i ) {
+					// Deselect old button
+					update_dice_button_style(picker, selected_dice_count, false);
+
+					// Select new button
+					selected_dice_count = i;
+					update_dice_button_style(picker, selected_dice_count, true);
+
+					stage.update();
+					playSound("snd_click");
+				}
+				return;
+			}
+		}
+	}
+}
+
+function update_dice_button_style(picker, buttonNum, selected){
+	var btn = picker.getChildByName("dice_btn_" + buttonNum);
+	if( !btn ) return;
+
+	var bg = btn.getChildByName("bg");
+	var txt = btn.getChildByName("txt");
+	if( !bg || !txt ) return;
+
+	// Clear and redraw background with new style
+	bg.graphics.clear();
+	if( selected ) {
+		// Selected: white background, green text, green border
+		bg.graphics.beginFill("#ffffff").drawRect(-resize(35), -resize(25), resize(70), resize(50));
+		bg.graphics.beginStroke("#00aa00").setStrokeStyle(3).drawRect(-resize(35), -resize(25), resize(70), resize(50));
+		txt.color = "#00aa00";
+	} else {
+		// Unselected: green background, white text, white border
+		bg.graphics.beginFill("#00aa00").drawRect(-resize(35), -resize(25), resize(70), resize(50));
+		bg.graphics.beginStroke("#ffffff").setStrokeStyle(2).drawRect(-resize(35), -resize(25), resize(70), resize(50));
+		txt.color = "#ffffff";
+	}
+}
+
+function execute_redeploy_move(count){
+	// Execute the redeployment
+	game.execute_redeploy(redeploy_source, redeploy_dest, count);
+
+	// Update visuals
+	draw_areadice(an2sn[redeploy_source], redeploy_source);
+	draw_areadice(an2sn[redeploy_dest], redeploy_dest);
+	draw_player_data();
+
+	// Remove picker
+	stage.removeChild(stage.getChildByName("dice_picker"));
+
+	// Clear highlights
+	spr[sn_from].visible = false;
+	spr[sn_to].visible = false;
+
+	// Update message
+	spr[sn_mes].text = "Moved " + count + " dice. Continue or click DONE";
+	spr[sn_mes].color = "#00aa00";
+
+	stage.update();
+	playSound("snd_success");
+
+	// Reset for next move
+	redeploy_source = -1;
+	redeploy_dest = -1;
+	click_func = redeploy_first_click;
+}
+
+function finish_redeploy(){
+	// If dice picker is visible, execute the move with selected amount
+	var picker = stage.getChildByName("dice_picker");
+	if( picker && redeploy_source >= 0 && redeploy_dest >= 0 ) {
+		// Execute the redeployment
+		game.execute_redeploy(redeploy_source, redeploy_dest, selected_dice_count);
+
+		// Update visuals
+		draw_areadice(an2sn[redeploy_source], redeploy_source);
+		draw_areadice(an2sn[redeploy_dest], redeploy_dest);
+		draw_player_data();
+
+		playSound("snd_success");
+	}
+
+	// Clean up
+	spr[sn_from].visible = false;
+	spr[sn_to].visible = false;
+	spr[sn_mes].visible = false;
+	spr[sn_btn+4].visible = false;
+	stage.removeChild(stage.getChildByName("dice_picker"));
+
+	stage.update();
+
+	// Proceed to supply phase
 	start_supply();
 }
 
@@ -928,9 +1312,11 @@ function start_battle(){
 
 function battle_dice(){
 
-        //  20220825  skip to after_battle
-        timer_func = after_battle
-        return;
+	// Skip animation if disabled in config
+	if (!GameConfig.animations) {
+		timer_func = after_battle;
+		return;
+	}
 
 	var i,j;
 	var w = (bturn==0)?-10:10;
@@ -997,7 +1383,7 @@ function battle_dice(){
 			timer_func = after_battle;
 		}
 	}
-	if( soundflg ){
+	if( soundflg && GameConfig.animations ){
 		playSound("snd_dice");
 	}
 	stage.update();
@@ -1016,6 +1402,7 @@ function after_battle(){
 	
 	var arm0 = game.adat[game.area_from].arm;
 	var arm1 = game.adat[game.area_to].arm;
+	var defender_dice_before = game.adat[game.area_to].dice;
 	var defeat = ( battle[0].sum>battle[1].sum ) ? 1 : 0;
 	if( defeat>0 ){
 		game.adat[game.area_to].dice = game.adat[game.area_from].dice-1;
@@ -1023,10 +1410,24 @@ function after_battle(){
 		game.adat[game.area_to].arm = arm0;
 		game.set_area_tc(arm0);
 		game.set_area_tc(arm1);
-		playSound("snd_success");
+		if (GameConfig.animations) {
+			playSound("snd_success");
+		}
+
+		// Record attack with full dice loss (territory conquered)
+		if (GameConfig.allowAlliances) {
+			game.record_attack(arm0, arm1, defender_dice_before);
+		}
 	}else{
 		game.adat[game.area_from].dice = 1;
-		playSound("snd_fail");
+		if (GameConfig.animations) {
+			playSound("snd_fail");
+		}
+
+		// Record failed attack (no dice lost by defender)
+		if (GameConfig.allowAlliances) {
+			game.record_attack(arm0, arm1, 0);
+		}
 	}
 	
 	draw_areashape(sn_area+game.area_to,game.area_to,0);
@@ -1138,12 +1539,27 @@ function supply_dice(){
 ////////////////////////////////////////////////////
 
 function next_player(){
+	var old_ban = game.ban;
+
 	for( var i=0; i<game.pmax; i++ ){
 		game.ban++;
 		if( game.ban >= game.pmax ) game.ban = 0;
 		var pn = game.jun[game.ban];
 		if( game.player[pn].area_tc ) break;
 	}
+
+	// Increment round when we've cycled back to the first player (ban wrapped to 0)
+	if (GameConfig.allowAlliances && game.ban < old_ban) {
+		game.increment_round();
+
+		// Update alliances (decrement turn counters) - only when round increments
+		var expired = game.update_alliances();
+		if( expired.length > 0 && game.jun[game.ban] == game.user ) {
+			// Could show notification of expired alliances
+			console.log("Alliances expired:", expired);
+		}
+	}
+
 	if( game.jun[game.ban] == game.user ) playSound("snd_myturn");
 
 	start_player();
@@ -1177,7 +1593,9 @@ function gameover(){
 		var a = (-80+waitcount)/100;
 		spr[sn_gameover].getChildByName("bg").alpha=a;
 		if( a>0.8 ){
-			playSound("snd_over");
+			if (GameConfig.animations) {
+				playSound("snd_over");
+			}
 			waitcount=0;
 			stat++;
 		}
@@ -1335,10 +1753,14 @@ function play_history(){
 				game.adat[an1].dice = game.adat[an0].dice-1;
 				game.adat[an0].dice = 1;
 				game.adat[an1].arm = game.adat[an0].arm;
-				playSound("snd_success");
+				if (GameConfig.animations) {
+					playSound("snd_success");
+				}
 			}else{
 				game.adat[an0].dice = 1;
-				playSound("snd_fail");
+				if (GameConfig.animations) {
+					playSound("snd_fail");
+				}
 			}
 			spr[sn_from].visible = false;
 			spr[sn_to].visible = false;
@@ -1351,6 +1773,506 @@ function play_history(){
 		}
 	}
 	waitcount++;
+}
+
+////////////////////////////////////////////////////
+//  Settings Screen
+////////////////////////////////////////////////////
+
+var settings_toggles = {};
+
+function start_settings(){
+	var i;
+
+	for( i=0; i<sn_max; i++ ) spr[i].visible = false;
+
+	// Title
+	spr[sn_mes].visible = true;
+	spr[sn_mes].text = "GAME SETTINGS";
+	spr[sn_mes].color = GameConfig.darkMode ? "#ffffff" : "#000000";
+	spr[sn_mes].font = Math.floor(48*nume/deno)+"px Anton";
+	spr[sn_mes].textAlign = "center";
+	spr[sn_mes].x = view_w/2;
+	spr[sn_mes].y = resize(100);
+
+	// Store current settings for display
+	settings_toggles = {
+		darkMode: GameConfig.darkMode,
+		animations: GameConfig.animations,
+		soundEnabled: GameConfig.soundEnabled,
+		soundVolume: GameConfig.soundVolume,
+		allowRedeployment: GameConfig.allowRedeployment,
+		allowAlliances: GameConfig.allowAlliances
+	};
+
+	// Buttons
+	spr[sn_btn+0].x = view_w/2 - resize(120);
+	spr[sn_btn+0].y = resize(700);
+	spr[sn_btn+0].visible = true;
+	spr[sn_btn+0].getChildAt(1).text = "SAVE & START";
+	btn_func[0] = save_settings;
+
+	spr[sn_btn+5].x = view_w/2 + resize(120);
+	spr[sn_btn+5].y = resize(700);
+	spr[sn_btn+5].visible = true;
+	spr[sn_btn+5].getChildAt(1).text = "CANCEL";
+	btn_func[5] = cancel_settings;
+
+	draw_settings_ui();
+
+	timer_func = null;
+	click_func = click_settings;
+	move_func = null;
+	releaese_func = null;
+}
+
+function click_settings(){
+	var mx = stage.mouseX;
+	var my = stage.mouseY;
+	var i;
+
+	// Check if clicking on buttons (handled by standard button system)
+	// Buttons are already checked by mouseUpListner, so we don't need to handle them here
+
+	// Define clickable areas for toggles (make them bigger and easier to click)
+	var toggles = [
+		{name: 'darkMode', y: 200, label: 'Dark Mode'},
+		{name: 'animations', y: 260, label: 'Animations'},
+		{name: 'soundEnabled', y: 320, label: 'Sound'},
+		{name: 'allowRedeployment', y: 440, label: 'Redeployment'},
+		{name: 'allowAlliances', y: 500, label: 'Alliances'}
+	];
+
+	for(i=0; i<toggles.length; i++){
+		var ty = resize(toggles[i].y);
+		// Expanded clickable area - entire row from left edge to right toggle button
+		if( mx > view_w/2 - resize(350) && mx < view_w/2 + resize(250) &&
+		    my > ty - resize(25) && my < ty + resize(25) ){
+			settings_toggles[toggles[i].name] = !settings_toggles[toggles[i].name];
+
+			// If toggling dark mode, update UI immediately
+			if(toggles[i].name === 'darkMode') {
+				// Temporarily apply theme to see changes
+				var tempConfig = GameConfig.darkMode;
+				GameConfig.darkMode = settings_toggles.darkMode;
+				GameConfig.applyTheme();
+			}
+
+			playSound("snd_click");
+			draw_settings_ui();
+			break;
+		}
+	}
+
+	// Volume slider (click to adjust)
+	var slider_y = resize(380);
+	if( mx > view_w/2 - resize(150) && mx < view_w/2 + resize(150) &&
+	    my > slider_y - resize(15) && my < slider_y + resize(15) ){
+		var vol = (mx - (view_w/2 - resize(150))) / resize(300);
+		settings_toggles.soundVolume = Math.max(0, Math.min(1, vol));
+		playSound("snd_click");
+		draw_settings_ui();
+	}
+}
+
+function draw_settings_ui(){
+	// Clear previous drawings
+	stage.removeChild(stage.getChildByName("settings_ui"));
+
+	var container = new createjs.Container();
+	container.name = "settings_ui";
+
+	var yPos = resize(200);
+	var xCenter = view_w/2;
+
+	// Determine text color based on theme
+	var textColor = GameConfig.darkMode ? "#ffffff" : "#000000";
+	var headerColor = GameConfig.darkMode ? "#888888" : "#666666";
+
+	// Visual Settings Header
+	var header1 = new createjs.Text("VISUAL", Math.floor(32*nume/deno)+"px Anton", headerColor);
+	header1.x = xCenter - resize(300);
+	header1.y = yPos - resize(30);
+	header1.textAlign = "left";
+	container.addChild(header1);
+
+	// Dark Mode
+	add_toggle(container, "Dark Mode", settings_toggles.darkMode, xCenter, yPos, textColor);
+	yPos += resize(60);
+
+	// Animations
+	add_toggle(container, "Animations", settings_toggles.animations, xCenter, yPos, textColor);
+	yPos += resize(90);  // Increased spacing before audio section
+
+	// Audio Settings Header
+	var header2 = new createjs.Text("AUDIO", Math.floor(32*nume/deno)+"px Anton", headerColor);
+	header2.x = xCenter - resize(300);
+	header2.y = yPos - resize(30);  // Position header above the section
+	header2.textAlign = "left";
+	container.addChild(header2);
+
+	// Sound Enabled
+	add_toggle(container, "Sound", settings_toggles.soundEnabled, xCenter, yPos, textColor);
+	yPos += resize(60);
+
+	// Volume Slider
+	var volLabel = new createjs.Text("Volume: " + Math.round(settings_toggles.soundVolume * 100) + "%",
+		Math.floor(24*nume/deno)+"px Roboto", textColor);
+	volLabel.x = xCenter - resize(300);
+	volLabel.y = yPos;
+	volLabel.textAlign = "left";
+	container.addChild(volLabel);
+
+	var slider_bg = new createjs.Shape();
+	slider_bg.graphics.beginFill("#444444").drawRect(xCenter - resize(150), yPos - resize(10), resize(300), resize(20));
+	container.addChild(slider_bg);
+
+	var slider_fg = new createjs.Shape();
+	slider_fg.graphics.beginFill("#00aa00").drawRect(xCenter - resize(150), yPos - resize(10),
+		resize(300) * settings_toggles.soundVolume, resize(20));
+	container.addChild(slider_fg);
+	yPos += resize(90);  // Increased spacing before gameplay section
+
+	// Gameplay Settings Header
+	var header3 = new createjs.Text("GAMEPLAY", Math.floor(32*nume/deno)+"px Anton", headerColor);
+	header3.x = xCenter - resize(300);
+	header3.y = yPos - resize(30);  // Position header above the section
+	header3.textAlign = "left";
+	container.addChild(header3);
+
+	// Redeployment
+	add_toggle(container, "Dice Redeployment", settings_toggles.allowRedeployment, xCenter, yPos, textColor);
+	yPos += resize(60);
+
+	// Alliances
+	add_toggle(container, "AI Alliances", settings_toggles.allowAlliances, xCenter, yPos, textColor);
+
+	stage.addChild(container);
+	stage.update();
+}
+
+function add_toggle(container, label, value, x, y, textColor){
+	var txt = new createjs.Text(label, Math.floor(24*nume/deno)+"px Roboto", textColor);
+	txt.x = x - resize(300);
+	txt.y = y;
+	txt.textAlign = "left";
+	txt.textBaseline = "middle";
+	container.addChild(txt);
+
+	var box = new createjs.Shape();
+	var color = value ? "#00aa00" : "#aa0000";
+	box.graphics.beginFill(color).drawRect(x + resize(100), y - resize(15), resize(100), resize(30));
+	box.graphics.beginStroke("#ffffff").setStrokeStyle(2).drawRect(x + resize(100), y - resize(15), resize(100), resize(30));
+	container.addChild(box);
+
+	var status = new createjs.Text(value ? "ON" : "OFF", Math.floor(20*nume/deno)+"px Anton", "#ffffff");
+	status.x = x + resize(150);
+	status.y = y;
+	status.textAlign = "center";
+	status.textBaseline = "middle";
+	container.addChild(status);
+}
+
+function save_settings(){
+	// Apply settings to GameConfig
+	GameConfig.darkMode = settings_toggles.darkMode;
+	GameConfig.animations = settings_toggles.animations;
+	GameConfig.soundEnabled = settings_toggles.soundEnabled;
+	GameConfig.soundVolume = settings_toggles.soundVolume;
+	GameConfig.allowRedeployment = settings_toggles.allowRedeployment;
+	GameConfig.allowAlliances = settings_toggles.allowAlliances;
+
+	// Save to localStorage
+	GameConfig.save();
+
+	// Apply theme
+	GameConfig.applyTheme();
+
+	// Update sound state
+	soundon = settings_toggles.soundEnabled && !touchdev;
+
+	// If sound was just enabled and sounds aren't loaded, load them now
+	// Note: Sound loading from local files requires running from a web server
+	if( soundon && !instance["snd_button"] ){
+		console.log("Loading sound files...");
+		try {
+			var queue = new createjs.LoadQueue(false);
+			queue.installPlugin(createjs.Sound);
+			queue.loadManifest(manifest, true);
+			queue.addEventListener("fileload", handleFileLoad);
+			queue.addEventListener("complete", function(){
+				console.log("Sounds loaded successfully");
+				playSound("snd_button");
+				start_title(); // Return to title after sounds load
+			});
+			queue.addEventListener("error", function(evt){
+				console.warn("Sound loading failed (expected when running from file://). Game will work without sound.");
+				soundon = false;
+				start_title(); // Return to title even if sounds fail
+			});
+		} catch(e) {
+			console.warn("Sound system initialization failed:", e);
+			soundon = false;
+			start_title(); // Return to title if sound init fails
+		}
+	} else {
+		// Sounds already loaded or sound is disabled
+		if( soundon ) {
+			playSound("snd_button");
+		}
+		start_title();
+	}
+}
+
+function cancel_settings(){
+	// Reload settings from GameConfig (discard changes)
+	GameConfig.load();
+	start_title();
+}
+
+////////////////////////////////////////////////////
+// Diplomacy & Alliance System
+////////////////////////////////////////////////////
+
+function start_diplomacy(){
+	// Check if player already has alliance (shouldn't happen if button logic is correct)
+	var pn = game.jun[game.ban];
+	if( game.get_alliance_info(pn) !== null ) {
+		console.log("Player already has an alliance");
+		return;
+	}
+
+	// Show diplomacy overlay
+	stage.removeChild(stage.getChildByName("diplomacy_ui"));
+
+	var container = new createjs.Container();
+	container.name = "diplomacy_ui";
+
+	// Semi-transparent background
+	var bg = new createjs.Shape();
+	bg.graphics.beginFill("rgba(0,0,0,0.85)").drawRect(0, 0, view_w, view_h);
+	container.addChild(bg);
+
+	// Title
+	var title = new createjs.Text("DIPLOMACY", Math.floor(48*nume/deno)+"px Anton", "#ffffff");
+	title.textAlign = "center";
+	title.x = view_w/2;
+	title.y = resize(80);
+	container.addChild(title);
+
+	// Subtitle
+	var subtitle = new createjs.Text("Select a color to ally with (3 turns)", Math.floor(20*nume/deno)+"px Roboto", "#aaaaaa");
+	subtitle.textAlign = "center";
+	subtitle.x = view_w/2;
+	subtitle.y = resize(130);
+	container.addChild(subtitle);
+
+	// Show AI players as clickable color boxes
+	var armcolor = ["#b37ffe","#b3ff01","#009302","#ff7ffe","#ff7f01","#b3fffe","#ffff01","#ff5858"];
+	var gridX = view_w / 2;
+	var gridY = resize(220);
+	var boxSize = resize(120);
+	var spacing = resize(140);
+	var cols = 3;
+	var boxIndex = 0;
+
+	for( var i = 0; i < game.pmax; i++ ) {
+		var p = game.jun[i];
+		if( p === game.user ) continue;  // Skip human player
+		if( game.player[p].area_tc === 0 ) continue;  // Skip eliminated players
+
+		// Can't ally with players who already have alliances
+		var targetHasAlliance = game.get_alliance_info(p) !== null;
+
+		var playerBox = new createjs.Container();
+		playerBox.name = "select_" + p;
+
+		// Calculate position in grid
+		var col = boxIndex % cols;
+		var row = Math.floor(boxIndex / cols);
+		var xPos = gridX + (col - 1) * spacing;
+		var yPos = gridY + row * spacing;
+
+		// Color box background
+		var boxBg = new createjs.Shape();
+		if (targetHasAlliance) {
+			// Gray out players with existing alliances
+			boxBg.graphics.beginFill("#444444").drawRect(-boxSize/2, -boxSize/2, boxSize, boxSize);
+			boxBg.graphics.beginStroke("#666666").setStrokeStyle(3).drawRect(-boxSize/2, -boxSize/2, boxSize, boxSize);
+		} else {
+			boxBg.graphics.beginFill(armcolor[p]).drawRect(-boxSize/2, -boxSize/2, boxSize, boxSize);
+			boxBg.graphics.beginStroke("#ffffff").setStrokeStyle(4).drawRect(-boxSize/2, -boxSize/2, boxSize, boxSize);
+		}
+		playerBox.addChild(boxBg);
+
+		// Player number
+		var pText = new createjs.Text("Player " + (p + 1), Math.floor(22*nume/deno)+"px Anton", targetHasAlliance ? "#888888" : "#000000");
+		pText.textAlign = "center";
+		pText.textBaseline = "middle";
+		pText.y = -resize(10);
+		playerBox.addChild(pText);
+
+		// Stats
+		var stats = new createjs.Text(game.player[p].area_tc + " territories\n" + game.player[p].dice_c + " dice",
+			Math.floor(16*nume/deno)+"px Roboto", targetHasAlliance ? "#888888" : "#333333");
+		stats.textAlign = "center";
+		stats.textBaseline = "middle";
+		stats.y = resize(20);
+		stats.lineHeight = resize(20);
+		playerBox.addChild(stats);
+
+		// Show "HAS ALLY" if they have an alliance
+		if (targetHasAlliance) {
+			var allyText = new createjs.Text("HAS ALLY", Math.floor(14*nume/deno)+"px Anton", "#ff4444");
+			allyText.textAlign = "center";
+			allyText.textBaseline = "middle";
+			allyText.y = resize(50);
+			playerBox.addChild(allyText);
+		}
+
+		playerBox.x = xPos;
+		playerBox.y = yPos;
+		container.addChild(playerBox);
+
+		boxIndex++;
+	}
+
+	// Close button
+	var closeBtn = new createjs.Container();
+	closeBtn.name = "close_diplomacy";
+
+	var closeBg = new createjs.Shape();
+	closeBg.graphics.beginFill("#aa0000").drawRect(-resize(80), -resize(25), resize(160), resize(50));
+	closeBg.graphics.beginStroke("#ffffff").setStrokeStyle(2).drawRect(-resize(80), -resize(25), resize(160), resize(50));
+	closeBtn.addChild(closeBg);
+
+	var closeTxt = new createjs.Text("CLOSE", Math.floor(24*nume/deno)+"px Anton", "#ffffff");
+	closeTxt.textAlign = "center";
+	closeTxt.textBaseline = "middle";
+	closeBtn.addChild(closeTxt);
+
+	closeBtn.x = view_w/2;
+	closeBtn.y = view_h - resize(100);
+	container.addChild(closeBtn);
+
+	stage.addChild(container);
+	stage.update();
+
+	click_func = click_diplomacy;
+}
+
+function click_diplomacy(){
+	var mx = stage.mouseX;
+	var my = stage.mouseY;
+	var diplomacy = stage.getChildByName("diplomacy_ui");
+	if( !diplomacy ) return;
+
+	// Remove any alliance result overlay on click
+	var result = stage.getChildByName("alliance_result");
+	if( result ) {
+		stage.removeChild(result);
+		stage.update();
+	}
+
+	// Check close button
+	var closeBtn = diplomacy.getChildByName("close_diplomacy");
+	if( closeBtn ) {
+		var pt = closeBtn.globalToLocal(mx, my);
+		if( Math.abs(pt.x) < resize(80) && Math.abs(pt.y) < resize(25) ) {
+			stage.removeChild(diplomacy);
+			stage.removeChild(stage.getChildByName("alliance_result"));
+			stage.update();
+			click_func = first_click;
+			return;
+		}
+	}
+
+	// Check player selection boxes
+	var boxSize = resize(120);
+	for( var i = 0; i < game.pmax; i++ ) {
+		var p = game.jun[i];
+		if( p === game.user ) continue;
+		if( game.player[p].area_tc === 0 ) continue;
+
+		var playerBox = diplomacy.getChildByName("select_" + p);
+		if( !playerBox ) continue;
+
+		// Check if click is within the box
+		var pt = playerBox.globalToLocal(mx, my);
+		if( Math.abs(pt.x) < boxSize/2 && Math.abs(pt.y) < boxSize/2 ) {
+			// Check if target has alliance (can't ally with them)
+			var targetHasAlliance = game.get_alliance_info(p) !== null;
+			if (!targetHasAlliance) {
+				propose_alliance_to_player(p);
+			}
+			return;
+		}
+	}
+}
+
+function propose_alliance_to_player(targetPlayer){
+	var currentPlayer = game.jun[game.ban];
+
+	// Propose alliance (3 turns, non-aggression)
+	var accepted = game.propose_alliance(currentPlayer, targetPlayer, "non_aggression", 3);
+
+	playSound(accepted ? "snd_success" : "snd_fail");
+
+	// Mark that this player used diplomacy this round
+	game.diplomacy_used_round[currentPlayer] = game.current_round;
+
+	// Show result
+	show_alliance_result(targetPlayer, accepted);
+
+	// Auto-close diplomacy after 2 seconds
+	setTimeout(function() {
+		stage.removeChild(stage.getChildByName("alliance_result"));
+		stage.removeChild(stage.getChildByName("diplomacy_ui"));
+
+		// Refresh the main UI to update button visibility (diplomacy button should now be hidden)
+		start_man();
+	}, 2000);
+}
+
+function show_alliance_result(targetPlayer, accepted){
+	var diplomacy = stage.getChildByName("diplomacy_ui");
+	if( !diplomacy ) return;
+
+	// Remove old result if exists
+	stage.removeChild(stage.getChildByName("alliance_result"));
+
+	var result = new createjs.Container();
+	result.name = "alliance_result";
+
+	var bg = new createjs.Shape();
+	bg.graphics.beginFill(accepted ? "rgba(0,170,0,0.9)" : "rgba(170,0,0,0.9)")
+		.drawRect(-resize(250), -resize(60), resize(500), resize(120));
+	result.addChild(bg);
+
+	var msgText = accepted ?
+		"Player " + (targetPlayer + 1) + " accepted your alliance!" :
+		"Player " + (targetPlayer + 1) + " rejected your alliance.";
+
+	var msg = new createjs.Text(msgText, Math.floor(24*nume/deno)+"px Roboto", "#ffffff");
+	msg.textAlign = "center";
+	msg.textBaseline = "middle";
+	msg.x = 0;
+	msg.y = -resize(10);
+	result.addChild(msg);
+
+	if( accepted ) {
+		var detail = new createjs.Text("(Non-aggression for 3 rounds)", Math.floor(18*nume/deno)+"px Roboto", "#ccffcc");
+		detail.textAlign = "center";
+		detail.textBaseline = "middle";
+		detail.y = resize(20);
+		result.addChild(detail);
+	}
+
+	result.x = view_w/2;
+	result.y = view_h/2;
+
+	stage.addChild(result);
+	stage.update();
 }
 
 ////////////////////////////////////////////////////
