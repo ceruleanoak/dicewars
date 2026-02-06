@@ -6,7 +6,7 @@
 var GameConfig = {
     // Visual Settings
     darkMode: true,
-    animations: false,
+    animations: true,
 
     // Audio Settings
     soundEnabled: false,

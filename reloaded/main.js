@@ -1317,8 +1317,7 @@ function start_battle(){
 		           defender_dice + " dice (sum=" + battle[1].sum + ")");
 	}
 
-        //  20220911  don't show the battle(?) sprite
-	//  spr[sn_battle].visible = true;
+	spr[sn_battle].visible = true;
 	
 	for( i=0; i<2; i++ ){
 		var w = 4;
