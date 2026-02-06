@@ -837,15 +837,32 @@ function second_click(){
 	var p = game.jun[game.ban];
 	var an = clicked_area();
 	if( an<0 ) return;
-	
-	// 同じエリアで選択解除	
+
+	// 同じエリアで選択解除
 	if( an==game.area_from ){
 		start_man();
 		return;
 	}
 	if( game.adat[an].arm == p ) return;
 	if( game.adat[an].join[game.area_from]==0 ) return;
-	
+
+	// Check if target is an ally - cannot attack allied players
+	var target_owner = game.adat[an].arm;
+	if( GameConfig.allowAlliances && game.are_allied(p, target_owner) ) {
+		// Show error message and deselect
+		spr[sn_mes].text = "Cannot attack allied player!";
+		spr[sn_mes].color = "#ff0000";
+		spr[sn_from].visible = false;
+		stage.update();
+		playSound("snd_fail");
+
+		// Reset to first click state after brief delay
+		setTimeout(function() {
+			start_man();
+		}, 1000);
+		return;
+	}
+
 	game.area_to = an;
 	draw_areashape(sn_to,an,1);
 	stage.update();
