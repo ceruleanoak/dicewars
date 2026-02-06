@@ -733,9 +733,11 @@ function start_man(){
 		var allyNum = allianceInfo.target;
 		spr[sn_mes].text = "Allied with P" + (allyNum + 1) + " (" + allianceInfo.turns_remaining + " rounds)";
 		spr[sn_mes].color = "#00aa00";
+		spr[sn_mes].font = Math.floor(24*nume/deno)+"px Roboto";
 	} else {
 		spr[sn_mes].text = "1. Click your area. 2. Click neighbor to attack.";
 		spr[sn_mes].color = "#000000";
+		spr[sn_mes].font = Math.floor(20*nume/deno)+"px Roboto";
 	}
 	spr[sn_mes].textAlign = "left";
 	spr[sn_mes].x = view_w*0.05;
@@ -1943,7 +1945,7 @@ function draw_settings_ui(){
 	// Visual Settings Header
 	var header1 = new createjs.Text("VISUAL", Math.floor(32*nume/deno)+"px Anton", headerColor);
 	header1.x = xCenter - resize(300);
-	header1.y = yPos - resize(30);
+	header1.y = yPos - resize(50);
 	header1.textAlign = "left";
 	container.addChild(header1);
 
@@ -1958,7 +1960,7 @@ function draw_settings_ui(){
 	// Audio Settings Header
 	var header2 = new createjs.Text("AUDIO", Math.floor(32*nume/deno)+"px Anton", headerColor);
 	header2.x = xCenter - resize(300);
-	header2.y = yPos - resize(30);  // Position header above the section
+	header2.y = yPos - resize(50);  // Position header above the section
 	header2.textAlign = "left";
 	container.addChild(header2);
 
@@ -1987,7 +1989,7 @@ function draw_settings_ui(){
 	// Gameplay Settings Header
 	var header3 = new createjs.Text("GAMEPLAY", Math.floor(32*nume/deno)+"px Anton", headerColor);
 	header3.x = xCenter - resize(300);
-	header3.y = yPos - resize(30);  // Position header above the section
+	header3.y = yPos - resize(50);  // Position header above the section
 	header3.textAlign = "left";
 	container.addChild(header3);
 
